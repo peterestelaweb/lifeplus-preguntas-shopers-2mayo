@@ -295,17 +295,16 @@ async def outgoing_call(request: Request):
         
         print('📱 Creating Twilio call with TWIML...')
         
-        # MEJORA: Aumentar el timeout para reducir el riesgo de corte prematuro
+        # MEJORA: Cambiar completamente el enfoque del TwiML para evitar que se corte
         call = client.calls.create(
-            twiml=f'''<Response>
-                        <Connect timeout="15">
-                            <Stream url="{stream_url}">
-                                <Parameter name="firstMessage" value="{first_message}" />
-                                <Parameter name="callerNumber" value="{phone_number}" />
-                            </Stream> 
-                        </Connect>
-                        <Pause length="20"/>
-                    </Response>''',
+            twiml=f'''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="alice" language="es-ES">{first_message}</Say>
+    <Gather input="speech dtmf" timeout="30" action="{PUBLIC_URL}/gather-input" method="POST">
+        <Say voice="alice" language="es-ES">Por favor, responda para continuar la conversación.</Say>
+    </Gather>
+    <Pause length="30"/>
+</Response>''',
             to=phone_number,
             from_=TWILIO_PHONE_NUMBER,
             status_callback=f"{PUBLIC_URL}/call-status",
@@ -1349,6 +1348,60 @@ async def send_to_webhook(payload):
         print(error_msg)
         traceback.print_exc()  # Imprimir stack trace completo
         return json.dumps({"error": error_msg})
+
+#
+# Handle Gather input from Twilio
+#
+@app.post("/gather-input")
+async def gather_input(request: Request):
+    """
+    Endpoint para manejar la respuesta del usuario cuando usa <Gather> en TwiML.
+    Recibe la entrada del usuario y puede continuar la conversación.
+    """
+    try:
+        # Obtener datos del formulario
+        form_data = await request.form()
+        data = {key: form_data[key] for key in form_data}
+        
+        # Obtener información clave
+        call_sid = data.get('CallSid')
+        speech_result = data.get('SpeechResult')
+        digits = data.get('Digits')
+        
+        print(f"📞 Gather input received for call {call_sid}")
+        print(f"🗣️ Speech result: {speech_result}")
+        print(f"🔢 Digits: {digits}")
+        
+        # Guardar la respuesta en la sesión si existe
+        if call_sid in sessions:
+            if speech_result:
+                sessions[call_sid]["user_response"] = speech_result
+            elif digits:
+                sessions[call_sid]["user_response"] = digits
+                
+            # Actualizar transcripción
+            if speech_result:
+                sessions[call_sid]["transcript"] += f"\nUsuario: {speech_result}\n"
+        
+        # Responder con TwiML para mantener la llamada abierta más tiempo
+        twiml_response = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="alice" language="es-ES">Gracias por su respuesta. Manteniendo la llamada activa.</Say>
+    <Pause length="60"/>
+</Response>"""
+        
+        return Response(content=twiml_response, media_type="text/xml")
+        
+    except Exception as e:
+        print(f"❌ Error processing gather input: {e}")
+        traceback.print_exc()
+        
+        # En caso de error, mantener la llamada abierta
+        twiml_response = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Pause length="30"/>
+</Response>"""
+        return Response(content=twiml_response, media_type="text/xml")
 
 #
 # Run app via Uvicorn
