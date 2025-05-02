@@ -291,19 +291,35 @@ async def outgoing_call(request: Request):
 
          # Respond with TwiML to connect to /media-stream
         host = PUBLIC_URL
-        stream_url = f"{host.replace('https', 'wss')}/media-stream"
+        
+        # Asegurarse de que la URL del WebSocket sea correcta
+        if host.startswith('https://'):
+            stream_url = host.replace('https://', 'wss://')
+        elif host.startswith('http://'):
+            stream_url = host.replace('http://', 'ws://')
+        else:
+            # Si no tiene esquema, asumimos https
+            stream_url = f"wss://{host}"
+        
+        # Asegurarse de que la URL termine con /media-stream
+        if not stream_url.endswith('/media-stream'):
+            stream_url = f"{stream_url}/media-stream"
+            
+        print(f"[DEBUG] Stream URL: {stream_url}")
         
         print('📱 Creating Twilio call with TWIML...')
         
-        # MEJORA: Volver al enfoque original pero con un timeout más largo
+        # Volver al enfoque original con <Connect> y <Stream>
         call = client.calls.create(
             twiml=f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="alice" language="es-ES">{first_message}</Say>
-    <Gather input="speech dtmf" timeout="300" action="{PUBLIC_URL}/gather-input" method="POST">
-        <Say voice="alice" language="es-ES">Por favor, responda para continuar la conversación.</Say>
-    </Gather>
-    <Say voice="alice" language="es-ES">No he recibido respuesta. Voy a finalizar la llamada.</Say>
+    <Connect timeout="300">
+        <Stream url="{stream_url}">
+            <Parameter name="firstMessage" value="{first_message}" />
+            <Parameter name="callerNumber" value="{phone_number}" />
+            <Parameter name="callSid" value="{{{{CallSid}}}}" />
+        </Stream>
+    </Connect>
 </Response>''',
             to=phone_number,
             from_=TWILIO_PHONE_NUMBER,
