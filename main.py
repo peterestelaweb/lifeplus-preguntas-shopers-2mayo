@@ -304,6 +304,7 @@ async def outgoing_call(request: Request):
                                 <Parameter name="callerNumber" value="{phone_number}" />
                             </Stream> 
                         </Connect>
+                        <Pause length="20"/>
                     </Response>''',
             to=phone_number,
             from_=TWILIO_PHONE_NUMBER,
@@ -1356,4 +1357,3 @@ if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=PORT)
 print("Cambio visible para commit")
-
