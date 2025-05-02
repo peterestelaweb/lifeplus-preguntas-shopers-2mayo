@@ -68,5 +68,5 @@ media/
 .Python
 *.manifest
 *.spec
-pip-log.txt
-pip-delete-this-directory.txt.env copia
+pip-delete-this-directory.txt
+.env copia

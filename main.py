@@ -295,12 +295,10 @@ async def outgoing_call(request: Request):
         
         print('📱 Creating Twilio call with TWIML...')
         
-        # MEJORA: Añadir un tiemout más corto para reducir el retraso inicial
-        # El valor de 3 segundos es un buen equilibrio que da tiempo suficiente 
-        # para establecer la conexión pero reduce la percepción de retraso inicial
+        # MEJORA: Aumentar el timeout para reducir el riesgo de corte prematuro
         call = client.calls.create(
             twiml=f'''<Response>
-                        <Connect timeout="3">
+                        <Connect timeout="15">
                             <Stream url="{stream_url}">
                                 <Parameter name="firstMessage" value="{first_message}" />
                                 <Parameter name="callerNumber" value="{phone_number}" />
@@ -701,11 +699,11 @@ async def call_status(request: Request):
                 sessions[call_sid]["end_reason"] = f"Answering machine: {answered_by}"
                 print(f"[INFO] End reason actualizado: {sessions[call_sid]['end_reason']}")
             
-            # Automatically hang up when answering machine is detected
+            # Reactivar colgado automático por contestador
             client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
             try:
                 # Hang up the call
-                client.calls(call_sid).update(status="completed")
+                client.calls(call_sid).update(status='completed')
                 print(f"📞 Call {call_sid} automatically hung up due to answering machine detection")
                 return {"status": "success", "message": "Call terminated due to answering machine detection"}
             except Exception as e:
@@ -1357,3 +1355,5 @@ async def send_to_webhook(payload):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=PORT)
+print("Cambio visible para commit")
+
