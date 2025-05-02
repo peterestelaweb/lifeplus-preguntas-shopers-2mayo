@@ -212,7 +212,7 @@ async def incoming_call(request: Request):
                 <Stream url="{stream_url}">
                     <Parameter name="firstMessage" value="{first_message}" />
                     <Parameter name="callerNumber" value="{caller_number}" />
-                    <Parameter name="callSid" value="{session_id}" />
+                    <Parameter name="callSid" value="{{{{CallSid}}}}" />
                 </Stream>
             </Connect>
         </Response>"""
@@ -295,15 +295,17 @@ async def outgoing_call(request: Request):
         
         print('📱 Creating Twilio call with TWIML...')
         
-        # MEJORA: Cambiar completamente el enfoque del TwiML para evitar que se corte
+        # MEJORA: Volver al enfoque original pero con un timeout más largo
         call = client.calls.create(
             twiml=f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="alice" language="es-ES">{first_message}</Say>
-    <Gather input="speech dtmf" timeout="30" action="{PUBLIC_URL}/gather-input" method="POST">
-        <Say voice="alice" language="es-ES">Por favor, responda para continuar la conversación.</Say>
-    </Gather>
-    <Pause length="30"/>
+    <Connect timeout="300">
+        <Stream url="{stream_url}">
+            <Parameter name="firstMessage" value="{first_message}" />
+            <Parameter name="callerNumber" value="{phone_number}" />
+            <Parameter name="callSid" value="{{{{CallSid}}}}" />
+        </Stream>
+    </Connect>
 </Response>''',
             to=phone_number,
             from_=TWILIO_PHONE_NUMBER,
