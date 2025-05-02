@@ -716,6 +716,8 @@ async def call_status(request: Request):
         if call_status == 'completed':
             if call_sid in sessions:
                 # Guardar la fecha de finalización y el motivo en la sesión
+                import pytz
+                madrid_tz = pytz.timezone('Europe/Madrid')
                 sessions[call_sid]["end_time"] = datetime.now(madrid_tz).isoformat()
                 sessions[call_sid]["end_reason"] = form_data.get('CallStatus', 'completed')
                 print(f"[INFO] Call {call_sid} marked as completed at {sessions[call_sid]['end_time']}")
