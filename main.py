@@ -115,6 +115,9 @@ TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID')
 TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN')
 TWILIO_PHONE_NUMBER = os.environ.get('TWILIO_PHONE_NUMBER')
 
+# *** AÑADE ESTA LÍNEA TEMPORALMENTE ***
+print(f"DEBUG: FastAPI cargó PUBLIC_URL: {PUBLIC_URL}")
+# **************************************
 # Ultravox defaults
 ULTRAVOX_MODEL         = "fixie-ai/ultravox-70B"
 ULTRAVOX_VOICE         = "Alex-Spanish"   # or “Mark”
@@ -204,7 +207,15 @@ async def incoming_call(request: Request):
 
     # Respond with TwiML to connect to /media-stream
     host = PUBLIC_URL
-    stream_url = f"{host.replace('https', 'wss')}/media-stream"
+    # Normalizar host: quitar barra final y cambiar esquema
+    normalized_host = host.rstrip('/')
+    if normalized_host.startswith('https://'):
+        stream_url = normalized_host.replace('https://', 'wss://')
+    elif normalized_host.startswith('http://'):
+        stream_url = normalized_host.replace('http://', 'ws://')
+    else:
+        stream_url = f"wss://{normalized_host}"
+    stream_url = f"{stream_url}/media-stream"
 
     twiml_response = f"""<?xml version="1.0" encoding="UTF-8"?>
         <Response>
@@ -293,13 +304,14 @@ async def outgoing_call(request: Request):
         host = PUBLIC_URL
         
         # Asegurarse de que la URL del WebSocket sea correcta
-        if host.startswith('https://'):
-            stream_url = host.replace('https://', 'wss://')
-        elif host.startswith('http://'):
-            stream_url = host.replace('http://', 'ws://')
+        normalized_host = host.rstrip('/')
+        if normalized_host.startswith('https://'):
+            stream_url = normalized_host.replace('https://', 'wss://')
+        elif normalized_host.startswith('http://'):
+            stream_url = normalized_host.replace('http://', 'ws://')
         else:
             # Si no tiene esquema, asumimos https
-            stream_url = f"wss://{host}"
+            stream_url = f"wss://{normalized_host}"
         
         # Asegurarse de que la URL termine con /media-stream
         if not stream_url.endswith('/media-stream'):
@@ -358,13 +370,17 @@ async def outgoing_call(request: Request):
 @app.websocket("/media-stream")
 async def media_stream(websocket: WebSocket):
     print(f"[PERF] [media-stream] Conexión WebSocket recibida a las {datetime.now().isoformat()}")
+    print(f"[LOG] Handler media_stream ACTIVADO. Esperando mensajes de Twilio...")
+    try:
+        await websocket.accept()
+        print('Client connected to /media-stream (Twilio)')
+    except Exception as e:
+        print(f"[ERROR] No se pudo aceptar la conexión WebSocket: {e}")
+        return
     """
     Handles the Twilio <Stream> WebSocket and connects to Ultravox via WebSocket.
     Includes transcoding audio between Twilio's G.711 µ-law and Ultravox's s16 PCM.
     """
-    await websocket.accept()
-    print('Client connected to /media-stream (Twilio)')
-
     # Initialize session variables
     call_sid = None
     session = None
