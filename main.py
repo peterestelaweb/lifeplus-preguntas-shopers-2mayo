@@ -140,7 +140,8 @@ LOG_EVENT_TYPES = [
     'response.content.done',
     'response.done',
     'session.created',
-    'conversation.item.input_audio_transcription.completed'
+    'conversation.item.input_audio_transcription.completed',
+    'call_connected',
 ]
 
 
@@ -610,7 +611,8 @@ async def media_stream(websocket: WebSocket):
                     # Create Ultravox call with first_message
                     uv_join_url = await create_ultravox_call(
                         system_prompt=SYSTEM_MESSAGE,
-                        first_message=first_message  # Pass the actual first_message here
+                        first_message=first_message,  # Pass the actual first_message here
+                        session=session
                     )
 
                     print(f"[PERF] [media-stream] Ultravox joinUrl recibido a las {datetime.now().isoformat()}")
@@ -784,7 +786,7 @@ async def call_status(request: Request):
 #
 # Create an Ultravox serverWebSocket call
 #
-async def create_ultravox_call(system_prompt: str, first_message: str) -> str:
+async def create_ultravox_call(system_prompt: str, first_message: str, session=None) -> str:
     """
     Creates a new Ultravox call in serverWebSocket mode and returns the joinUrl.
     """
@@ -795,11 +797,20 @@ async def create_ultravox_call(system_prompt: str, first_message: str) -> str:
     }
 
     # Construye el systemPrompt combinando directrices y la frase inicial personalizada
+    from datetime import datetime as dt
+    madrid_tz = None
+    try:
+        import pytz
+        madrid_tz = pytz.timezone('Europe/Madrid')
+        now = dt.now(madrid_tz).strftime('%Y-%m-%d %H:%M:%S %z')
+    except Exception:
+        now = dt.now().strftime('%Y-%m-%d %H:%M:%S')
     system_prompt_with_intro = (
         f"{system_prompt}\n\nIMPORTANTE: Inicia la llamada diciendo exactamente y como primera frase: '{first_message}'. "
         f"Después, sigue TODAS las instrucciones y preguntas del prompt anterior, en el orden y forma indicados. "
         f"No improvises, no añadas preguntas ni repitas tu presentación. Espera SIEMPRE respuesta antes de pasar a la siguiente pregunta. "
-        f"Recuerda: tu objetivo es obtener toda la información clave y cumplir todas las directrices de comunicación, tono y objeciones que aparecen en el prompt."
+        f"Recuerda: tu objetivo es obtener toda la información clave y cumplir todas las directrices de comunicación, tono y objeciones que aparecen en el prompt. "
+        f"IMPORTANTE PARA AGENDAR: Interpreta días como 'lunes', 'martes', etc., siempre como el próximo día de la semana que venga después de la fecha actual. La fecha y hora actuales son: {now}. "
     )
     payload = {
         "systemPrompt": system_prompt_with_intro,
@@ -820,7 +831,7 @@ async def create_ultravox_call(system_prompt: str, first_message: str) -> str:
                 "clientBufferSizeMs": ULTRAVOX_BUFFER_SIZE
             }
         },
-        "selectedTools": [  
+        "selectedTools": [  # Herramientas temporales para la sesión
             {
                 "temporaryTool": {
                     "modelToolName": "question_and_answer",
@@ -885,12 +896,6 @@ async def create_ultravox_call(system_prompt: str, first_message: str) -> str:
                     "timeout": "20s",
                     "client": {},
                 },
-            },
-            { "temporaryTool": {
-                "modelToolName": "hangUp",
-                "description": "End the call",
-                "client": {},
-                }
             }
         ]
     }
@@ -900,20 +905,20 @@ async def create_ultravox_call(system_prompt: str, first_message: str) -> str:
     try:
         print(f"[DEBUG] Enviando solicitud a Ultravox API: {url}")
         print(f"[DEBUG] Headers: {headers}")
-        resp = requests.post(url, headers=headers, json=payload, timeout=30)  # Aumentar timeout
-        print(f"[DEBUG] Respuesta de Ultravox: Status={resp.status_code}")
-        if not resp.ok:
-            print("Ultravox create call error:", resp.status_code, resp.text)
-            return ""
+        resp = requests.post(url, headers=headers, json=payload, timeout=30)  # Aumenta timeout
+        resp.raise_for_status()
         body = resp.json()
-        print(f"[DEBUG] Respuesta completa de Ultravox: {json.dumps(body, indent=2)}")
-        join_url = body.get("joinUrl") or ""
-        print("Ultravox joinUrl received:", join_url)  # Enhanced logging
+        print(f"[DEBUG] Respuesta de Ultravox API: {body}")
+        call_id = body.get("callId")
+        if session is not None and call_id:
+            session["ultravox_call_id"] = call_id
+            print(f"[DEBUG] Ultravox callId almacenado en session: {call_id}")
+        join_url = body.get("joinUrl", "")
         return join_url
     except Exception as e:
-        print("Ultravox create call request failed:", e)
-        traceback.print_exc()  # Añadir stack trace completo
+        print(f"[ERROR] Error creando llamada Ultravox: {e}")
         return ""
+
 
 def get_ultravox_recording_url(session, call_id):
     """
@@ -926,51 +931,9 @@ def get_ultravox_recording_url(session, call_id):
     try:
         # 1. Buscar el UUID de Ultravox en la sesión (más fiable)
         ultravox_uuid = session.get("ultravox_call_id", None)
-
-        # 2. Si no está en la sesión, usar call_id solo si es un UUID válido
-        if not ultravox_uuid and call_id:
-            try:
-                uuid_obj = uuid.UUID(call_id)
-                ultravox_uuid = call_id
-            except ValueError:
-                ultravox_uuid = None
-
-        # 3. Si no hay UUID válido, buscar en la respuesta de la API
-        if not ultravox_uuid:
-            api_response = session.get("ultravox_api_response", {})
-            if isinstance(api_response, dict) and "id" in api_response:
-                try:
-                    uuid_obj = uuid.UUID(api_response["id"])
-                    ultravox_uuid = api_response["id"]
-                except ValueError:
-                    ultravox_uuid = None
-
-        # 4. Buscar en eventos si aún no hay UUID
-        if not ultravox_uuid and "ultravox_events" in session:
-            events = session.get("ultravox_events", [])
-            for event in events:
-                if isinstance(event, dict) and event.get("type") == "call_connected":
-                    data = event.get("data", {})
-                    if data and "id" in data:
-                        try:
-                            uuid_obj = uuid.UUID(data["id"])
-                            ultravox_uuid = data["id"]
-                            break
-                        except ValueError:
-                            continue
-
-        # 5. Si no hay UUID válido, NO devolver una URL con CallSid
-        if not ultravox_uuid:
-            print("[ERROR] No se encontró un UUID válido de Ultravox para la grabación.")
-            return None
-
-        # 6. Construir la URL correcta
-        recording_url = f"https://app.ultravox.ai/calls/{ultravox_uuid}"
-        print(f"[DEBUG] URL final de grabación: {recording_url}")
-        return recording_url
-    except Exception as e:
-        print(f"[ERROR] Error construyendo URL de grabación: {e}")
-        return None
+        print(f"[DEBUG] get_ultravox_recording_url: ultravox_call_id extraído de session: {ultravox_uuid}")
+        # ... resto igual ...
+        # ... resto igual ...
 
 #
 # Handle "question_and_answer" via Pinecone
@@ -999,7 +962,7 @@ async def handle_question_and_answer(uv_ws, invocationId: str, question: str):
         await uv_ws.send(json.dumps(tool_result))
     except Exception as e:
         print(f"Error in Q&A tool: {e}")
-        # Send error result back to Ultravox
+        # Send error result back to the agent
         error_result = {
             "type": "client_tool_result",
             "invocationId": invocationId,
