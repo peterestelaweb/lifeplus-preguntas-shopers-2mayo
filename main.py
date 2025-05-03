@@ -676,7 +676,16 @@ async def media_stream(websocket: WebSocket):
             # Attempt to close Ultravox ws
             if uv_ws and uv_ws.state == websockets.protocol.State.OPEN:
                 await uv_ws.close()
-            # Post the transcript to N8N
+            
+            # End Twilio call
+            try:
+                client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+                client.calls(call_sid).update(status='completed')
+                print(f"Successfully ended Twilio call: {call_sid}")
+            except Exception as e:
+                print(f"Error ending Twilio call: {e}")
+            
+            # Send transcript to N8N and cleanup session
             if session:
                 if not session.get("transcript_sent", False):
                     await send_transcript_to_n8n(session)
@@ -932,8 +941,31 @@ def get_ultravox_recording_url(session, call_id):
         # 1. Buscar el UUID de Ultravox en la sesión (más fiable)
         ultravox_uuid = session.get("ultravox_call_id", None)
         print(f"[DEBUG] get_ultravox_recording_url: ultravox_call_id extraído de session: {ultravox_uuid}")
-        # ... resto igual ...
-        # ... resto igual ...
+        
+        # 2. Si no está en la sesión, verificar si call_id es un UUID válido
+        if not ultravox_uuid and call_id:
+            try:
+                # Verificar si es un UUID válido
+                uuid_obj = uuid.UUID(call_id)
+                ultravox_uuid = str(uuid_obj)
+                print(f"[DEBUG] get_ultravox_recording_url: call_id es un UUID válido: {ultravox_uuid}")
+            except ValueError:
+                # No es un UUID válido, probablemente es un CallSid de Twilio
+                print(f"[DEBUG] get_ultravox_recording_url: call_id no es un UUID válido: {call_id}")
+                ultravox_uuid = None
+        
+        # 3. Construir la URL solo si tenemos un UUID válido
+        if ultravox_uuid:
+            recording_url = f"https://app.ultravox.ai/recordings/{ultravox_uuid}"
+            print(f"[DEBUG] get_ultravox_recording_url: URL de grabación construida: {recording_url}")
+            return recording_url
+        else:
+            print("[WARN] get_ultravox_recording_url: No se pudo obtener un UUID válido para la grabación")
+            return ""
+    except Exception as e:
+        print(f"[ERROR] Error en get_ultravox_recording_url: {e}")
+        return ""
+
 
 #
 # Handle "question_and_answer" via Pinecone
@@ -970,6 +1002,7 @@ async def handle_question_and_answer(uv_ws, invocationId: str, question: str):
             "error_message": "An error occurred while processing your request."
         }
         await uv_ws.send(json.dumps(error_result))
+
 
 #
 # Handle "schedule_meeting" calls
@@ -1262,7 +1295,7 @@ async def send_transcript_to_n8n(session):
             try:
                 print(f"[DEBUG RUTA 2] Attempting POST to N8N: {N8N_WEBHOOK_URL}")
                 import requests
-                response = requests.post(N8N_WEBHOOK_URL, json=payload, timeout=30)
+                response = requests.post(N8N_WEBHOOK_URL, json=payload)
                 print(f"[DEBUG RUTA 2] N8N webhook response status code: {response.status_code}")
                 if response.status_code == 200:
                     print("[DEBUG RUTA 2] Envío completado con éxito")
