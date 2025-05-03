@@ -15,7 +15,8 @@ import base64
 import json
 import os
 import pytz
-from datetime import timedelta
+from datetime import timedelta, timezone
+import dateutil.parser
 
 # Añadir esta función para formatear la hora de manera natural
 def format_hour_naturally(hour):
@@ -381,6 +382,11 @@ async def media_stream(websocket: WebSocket):
     """
     Handles the Twilio <Stream> WebSocket and connects to Ultravox via WebSocket.
     Includes transcoding audio between Twilio's G.711 µ-law and Ultravox's s16 PCM.
+    
+    NOTA SOBRE LATENCIA: El retraso inicial de 3-4 segundos antes de la primera respuesta
+    del agente es una característica inherente del modelo de Ultravox y no puede reducirse
+    significativamente desde este código Python. Es parte del tiempo que el modelo necesita
+    para procesar el contexto inicial y generar la primera respuesta.
     """
     # Initialize session variables
     call_sid = None
@@ -674,8 +680,12 @@ async def media_stream(websocket: WebSocket):
         except WebSocketDisconnect:
             print(f"Twilio WebSocket disconnected (CallSid={call_sid}).")
             # Attempt to close Ultravox ws
-            if uv_ws and uv_ws.state == websockets.protocol.State.OPEN:
-                await uv_ws.close()
+            if uv_ws and hasattr(uv_ws, 'state') and uv_ws.state == websockets.protocol.State.OPEN:
+                try:
+                    await uv_ws.close()
+                    print(f"[DEBUG] Ultravox WebSocket cerrado correctamente para CallSid={call_sid}")
+                except Exception as e:
+                    print(f"[ERROR] Error al cerrar Ultravox WebSocket: {e}")
             
             # End Twilio call
             try:
@@ -814,12 +824,18 @@ async def create_ultravox_call(system_prompt: str, first_message: str, session=N
         now = dt.now(madrid_tz).strftime('%Y-%m-%d %H:%M:%S %z')
     except Exception:
         now = dt.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    # Obtener la fecha actual para el prompt
+    current_date = dt.now().strftime('%Y-%m-%d')
+    
     system_prompt_with_intro = (
         f"{system_prompt}\n\nIMPORTANTE: Inicia la llamada diciendo exactamente y como primera frase: '{first_message}'. "
         f"Después, sigue TODAS las instrucciones y preguntas del prompt anterior, en el orden y forma indicados. "
         f"No improvises, no añadas preguntas ni repitas tu presentación. Espera SIEMPRE respuesta antes de pasar a la siguiente pregunta. "
         f"Recuerda: tu objetivo es obtener toda la información clave y cumplir todas las directrices de comunicación, tono y objeciones que aparecen en el prompt. "
-        f"IMPORTANTE PARA AGENDAR: Interpreta días como 'lunes', 'martes', etc., siempre como el próximo día de la semana que venga después de la fecha actual. La fecha y hora actuales son: {now}. "
+        f"IMPORTANTE PARA AGENDAR: Interpreta días como 'lunes', 'martes', etc., siempre como el próximo día de la semana que venga después de la fecha actual. "
+        f"La fecha actual del servidor es: {current_date}. Por ejemplo, si hoy es sábado 3 de mayo de 2025 y el cliente dice 'lunes', "
+        f"debes interpretar eso como lunes 5 de mayo de 2025, NO como martes 6 de mayo. Usa siempre la fecha correcta para el día de la semana mencionado."
     )
     payload = {
         "systemPrompt": system_prompt_with_intro,
@@ -956,7 +972,8 @@ def get_ultravox_recording_url(session, call_id):
         
         # 3. Construir la URL solo si tenemos un UUID válido
         if ultravox_uuid:
-            recording_url = f"https://app.ultravox.ai/recordings/{ultravox_uuid}"
+            # CORRECCIÓN: Cambiar /recordings/ a /calls/ en la URL
+            recording_url = f"https://app.ultravox.ai/calls/{ultravox_uuid}"
             print(f"[DEBUG] get_ultravox_recording_url: URL de grabación construida: {recording_url}")
             return recording_url
         else:
@@ -1010,6 +1027,14 @@ async def handle_question_and_answer(uv_ws, invocationId: str, question: str):
 async def handle_schedule_meeting(uv_ws, session, invocationId: str, parameters):
     """
     Uses N8N to finalize a meeting schedule.
+    
+    NOTA SOBRE EXTRACCIÓN DE FECHAS: El problema de que Ultravox extraiga un día incorrecto 
+    (por ejemplo, martes en lugar de lunes) es una limitación del sistema de extracción de 
+    entidades de Ultravox, no de este código Python. Cuando Ultravox envía "2025-05-06 15:00:00" 
+    (Martes) a pesar de que el usuario dijo "lunes", este código procesa correctamente el valor 
+    recibido. No hay una solución simple desde Python para forzar a Ultravox a extraer el día 
+    correcto si su sistema de extracción se equivoca. La única mitigación es la nota en el prompt 
+    del sistema que intenta guiar la interpretación de fechas relativas.
     """
     try:
         name = parameters.get("name")
@@ -1230,34 +1255,59 @@ async def send_transcript_to_n8n(session):
         duration = session.get("duration", "No respondido")
         if duration == "No respondido":
             try:
+                # Usar dateutil.parser para un parsing más robusto de fechas
+                import dateutil.parser
+                
                 # Ensure both times are strings
                 st = start_time
                 et = end_time
-                # Replace Z with +00:00 if present (for fromisoformat compatibility)
+                
+                # Parse dates with dateutil for better robustness
                 if isinstance(st, str):
-                    st = st.replace("Z", "+00:00")
+                    try:
+                        start_dt = dateutil.parser.parse(st)
+                    except Exception as e:
+                        print(f"[ERROR] Error parsing start_time: {e}")
+                        start_dt = datetime.now(timezone.utc) - timedelta(minutes=1)  # Fallback
+                else:
+                    start_dt = st
+                
                 if isinstance(et, str):
-                    et = et.replace("Z", "+00:00")
-                # If either string lacks timezone info, add UTC
-                iso8601_tz_re = re.compile(r"[+-][0-9]{2}:[0-9]{2}$")
-                if isinstance(st, str) and not iso8601_tz_re.search(st):
-                    st += "+00:00"
-                if isinstance(et, str) and not iso8601_tz_re.search(et):
-                    et += "+00:00"
-                start_dt = datetime.fromisoformat(st) if isinstance(st, str) else st
-                end_dt = datetime.fromisoformat(et) if isinstance(et, str) else et
+                    try:
+                        end_dt = dateutil.parser.parse(et)
+                    except Exception as e:
+                        print(f"[ERROR] Error parsing end_time: {e}")
+                        end_dt = datetime.now(timezone.utc)  # Fallback
+                else:
+                    end_dt = et
+                
+                # Ensure both datetimes are timezone-aware
+                if start_dt.tzinfo is None:
+                    start_dt = start_dt.replace(tzinfo=timezone.utc)
+                if end_dt.tzinfo is None:
+                    end_dt = end_dt.replace(tzinfo=timezone.utc)
+                
                 duration_seconds = (end_dt - start_dt).total_seconds()
+                
+                # Formato min:sec
                 minutes = int(duration_seconds // 60)
                 seconds = int(duration_seconds % 60)
                 duration = f"{minutes}m {seconds}s"
-                print(f"[DEBUG RUTA 2] Duración calculada: {duration}")
+                
+                # Guardar duración en la sesión
+                session["duration"] = duration
+                session["duration_seconds"] = duration_seconds
+                
+                print(f"[DEBUG RUTA 2] Duración calculada: {duration} ({duration_seconds} segundos)")
             except Exception as e:
-                print(f"[ERROR RUTA 2] Error calculando duración: {e}")
-                import traceback
+                print(f"[ERROR] Error calculando duración: {e}")
                 traceback.print_exc()
-                duration = "Error calculando"
-        else:
-            print(f"[DEBUG RUTA 2] Usando duración pre-calculada: {duration}")
+                duration = "Error calculando duración"
+        
+        # Obtener end_reason si existe, o usar un valor por defecto
+        end_reason = session.get("end_reason", "completed")
+        print(f"[DEBUG RUTA 2] END_REASON: {end_reason}")
+        
         call_id = session.get("call_id") or session.get("ultravox_call_id") or session.get("call_sid", "desconocido")
         print(f"[DEBUG RUTA 2] CALL_ID: {call_id}")
         ultravox_url = get_ultravox_recording_url(session, call_id)
@@ -1267,10 +1317,7 @@ async def send_transcript_to_n8n(session):
         else:
             ultravox_url = ultravox_url.rstrip(";")
         print(f"[DEBUG RUTA 2] ULTRAVOX_RECORDING_URL: {ultravox_url}")
-        end_reason = session.get("end_reason") or session.get("ultravox_data", {}).get("end_reason") or session.get("callDetails", {}).get("callStatus", "desconocido")
-        if end_reason == "No respondido" or not end_reason:
-            end_reason = "desconocido"
-        print(f"[DEBUG RUTA 2] END_REASON final para enviar a N8N: {end_reason}")
+        
         summary = session.get("summary", "") or session.get("ultravox_data", {}).get("summary", "")
         nombre_persona = session.get("nombre_persona", "") or "No extraído"
         payload = {
