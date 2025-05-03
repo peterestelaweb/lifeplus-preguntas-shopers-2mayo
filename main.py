@@ -1025,6 +1025,7 @@ async def handle_schedule_meeting(uv_ws, session, invocationId: str, parameters)
         email = parameters.get("email", "")
         
         print(f"[DEBUG RUTA 3] Received schedule_meeting parameters: name={name}, purpose={purpose}, datetime={datetime_str}, location={location}, email={email}")
+        print(f"[DEBUG] handle_schedule_meeting: Raw datetime received from Ultravox: {datetime_str}")
 
         # Validate parameters
         if not all([name, purpose, datetime_str, location]):
@@ -1038,10 +1039,11 @@ async def handle_schedule_meeting(uv_ws, session, invocationId: str, parameters)
         
         # Usar la nueva función para limpiar y formatear la fecha
         formatted_datetime = format_datetime_for_calendar(datetime_str)
+        print(f"[DEBUG] handle_schedule_meeting: After format_datetime_for_calendar: {formatted_datetime}")
         print(f"[DEBUG RUTA 3] Formatted datetime for calendar: {formatted_datetime}")
         
         # Calcular end_datetime (30 minutos después) con mismo formato y zona horaria
-        from datetime import datetime
+        from datetime import datetime, timedelta
         
         try:
             # Parsear start_time y añadir 30 minutos
@@ -1103,6 +1105,7 @@ async def handle_schedule_meeting(uv_ws, session, invocationId: str, parameters)
             clean_end = clean_end.replace('Z', '')
             
         end_formatted_with_tz = f"{clean_end}+02:00"
+        print(f"[DEBUG] handle_schedule_meeting: Final datetime and end_datetime for n8n payload: start={formatted_datetime_with_tz}, end={end_formatted_with_tz}")
         
         data = {
             "name": name,
@@ -1195,194 +1198,181 @@ async def handle_schedule_meeting(uv_ws, session, invocationId: str, parameters)
 # Send entire transcript to N8N (end of call)
 #
 async def send_transcript_to_n8n(session):
-    print("[DEBUG RUTA 2] Iniciando envío de transcripción a N8N")
-    print("[DEBUG RUTA 2] Contenido de la sesión:", session)
-    
-    # 1. Obtener valores de los sistemas internos
-    # TELEFONO: Obtener del número de teléfono de la sesión
-    telefono = session.get("callerNumber", "Unknown")
-    
-    # PIN_LIFEPLUS: Obtener directamente de la sesión donde lo guardamos al iniciar la llamada
-    # MEJORA: Priorizar el PIN_LIFEPLUS guardado directamente en la sesión
-    pin_lifeplus = session.get("pin_lifeplus", "No respondido")
-    if pin_lifeplus == "No respondido" or not pin_lifeplus:
-        # Intentar obtener de los parámetros de n8n que guardamos
-        if session.get("callDetails", {}).get("parameters", {}).get("PIN_LIFEPLUS"):
-            pin_lifeplus = session.get("callDetails").get("parameters").get("PIN_LIFEPLUS")
-        # Intentar obtener de otras fuentes si no lo tenemos directamente
-        elif session.get("http_request_data", {}).get("parameters", []):
-            parameters = session.get("http_request_data").get("parameters", [])
-            for param in parameters:
-                if isinstance(param, dict) and param.get("name") == "PIN_LIFEPLUS":
-                    pin_lifeplus = param.get("value")
-                    break
-        # Intentar extraer directamente del JSON original del request
-        elif session.get("callDetails", {}).get("originalRequest", {}).get("PIN_LIFEPLUS"):
-            pin_lifeplus = session.get("callDetails").get("originalRequest").get("PIN_LIFEPLUS")
-        # Intentar obtener del payload HTTP original
-        elif session.get("callDetails", {}).get("pin_lifeplus"):
-            pin_lifeplus = session.get("callDetails").get("pin_lifeplus")
-    
-    print(f"[DEBUG RUTA 2] PIN_LIFEPLUS extraído: {pin_lifeplus}")
-    
-    # 2. Obtener timestamp y calcular duración
-    from datetime import datetime
-    
-    # START_TIME: Inicio de la llamada - usar el que guardamos al crear la llamada
-    start_time = session.get("start_time") or session.get("callDetails", {}).get("startTime", "No respondido")
-    
-    # END_TIME: Fin de la llamada (ahora si no está definido)
-    end_time = session.get("end_time") or datetime.now().isoformat()
-    
-    print(f"[DEBUG RUTA 2] START_TIME: {start_time}")
-    print(f"[DEBUG RUTA 2] END_TIME: {end_time}")
+    print("[DEBUG] Entering send_transcript_to_n8n function")
+    try:
+        print("[DEBUG RUTA 2] Iniciando envío de transcripción a N8N")
+        print("[DEBUG RUTA 2] Contenido de la sesión:", session)
         
-    # DURACION: Calcular duración de la llamada - usar duración ya calculada o calcular si no existe
-    duration = session.get("duration", "No respondido")
-    if duration == "No respondido":
-        try:
-            # Intentar calcular duración si tenemos timestamps válidos
-            if start_time != "No respondido" and end_time != "No respondido":
-                # Convertir strings a objetos datetime
-                start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00")) if isinstance(start_time, str) else start_time
-                end_dt = datetime.fromisoformat(end_time.replace("Z", "+00:00")) if isinstance(end_time, str) else end_time
-                
-                # Calcular duración en segundos
-                duration_secs = int((end_dt - start_dt).total_seconds())
-                
-                # Formato min:sec
-                minutes = int(duration_secs // 60)
-                seconds = int(duration_secs % 60)
+        # 1. Obtener valores de los sistemas internos
+        telefono = session.get("callerNumber", "Unknown")
+        pin_lifeplus = session.get("pin_lifeplus", "No respondido")
+        if pin_lifeplus == "No respondido" or not pin_lifeplus:
+            if session.get("callDetails", {}).get("parameters", {}).get("PIN_LIFEPLUS"):
+                pin_lifeplus = session.get("callDetails").get("parameters").get("PIN_LIFEPLUS")
+            elif session.get("http_request_data", {}).get("parameters", []):
+                parameters = session.get("http_request_data").get("parameters", [])
+                for param in parameters:
+                    if isinstance(param, dict) and param.get("name") == "PIN_LIFEPLUS":
+                        pin_lifeplus = param.get("value")
+                        break
+            elif session.get("callDetails", {}).get("originalRequest", {}).get("PIN_LIFEPLUS"):
+                pin_lifeplus = session.get("callDetails").get("originalRequest").get("PIN_LIFEPLUS")
+            elif session.get("callDetails", {}).get("pin_lifeplus"):
+                pin_lifeplus = session.get("callDetails").get("pin_lifeplus")
+        print(f"[DEBUG RUTA 2] PIN_LIFEPLUS extraído: {pin_lifeplus}")
+
+        from datetime import datetime, timezone
+        import re
+
+        start_time = session.get("start_time") or session.get("callDetails", {}).get("startTime", "No respondido")
+        end_time = session.get("end_time")
+        if not end_time:
+            # Always use timezone-aware now (UTC)
+            end_time = datetime.now(timezone.utc).isoformat()
+        print(f"[DEBUG RUTA 2] START_TIME: {start_time}")
+        print(f"[DEBUG RUTA 2] END_TIME: {end_time}")
+        duration = session.get("duration", "No respondido")
+        if duration == "No respondido":
+            try:
+                # Ensure both times are strings
+                st = start_time
+                et = end_time
+                # Replace Z with +00:00 if present (for fromisoformat compatibility)
+                if isinstance(st, str):
+                    st = st.replace("Z", "+00:00")
+                if isinstance(et, str):
+                    et = et.replace("Z", "+00:00")
+                # If either string lacks timezone info, add UTC
+                iso8601_tz_re = re.compile(r"[+-][0-9]{2}:[0-9]{2}$")
+                if isinstance(st, str) and not iso8601_tz_re.search(st):
+                    st += "+00:00"
+                if isinstance(et, str) and not iso8601_tz_re.search(et):
+                    et += "+00:00"
+                start_dt = datetime.fromisoformat(st) if isinstance(st, str) else st
+                end_dt = datetime.fromisoformat(et) if isinstance(et, str) else et
+                duration_seconds = (end_dt - start_dt).total_seconds()
+                minutes = int(duration_seconds // 60)
+                seconds = int(duration_seconds % 60)
                 duration = f"{minutes}m {seconds}s"
                 print(f"[DEBUG RUTA 2] Duración calculada: {duration}")
-        except Exception as e:
-            print(f"[ERROR RUTA 2] Error calculando duración: {e}")
-            traceback.print_exc()
-            duration = "Error calculando"
-    else:
-        print(f"[DEBUG RUTA 2] Usando duración pre-calculada: {duration}")
-    
-    # 3. CALL_ID y ULTRAVOX_RECORDING_URL: Usar el call_id guardado en la sesión
-    # MEJORA: Usar el call_id que guardamos directamente en la sesión
-    call_id = session.get("call_id") or session.get("ultravox_call_id") or session.get("call_sid", "desconocido")
-    
-    print(f"[DEBUG RUTA 2] CALL_ID: {call_id}")
-        
-    # Construir URL de grabación
-    ultravox_url = get_ultravox_recording_url(session, call_id)
-    
-    print(f"[DEBUG RUTA 2] ULTRAVOX_RECORDING_URL: {ultravox_url}")
-    
-    # MEJORA: Asegurarse que la URL tiene el formato correcto sin punto y coma al final
-    ultravox_url = ultravox_url.rstrip(";")
-    
-    # 4. End_Reason: Obtener motivo de finalización
-    end_reason = session.get("end_reason") or session.get("ultravox_data", {}).get("end_reason") or session.get("callDetails", {}).get("callStatus", "desconocido")
-    if end_reason == "No respondido" or not end_reason:
-        end_reason = "desconocido"
-    
-    print(f"[DEBUG RUTA 2] END_REASON final para enviar a N8N: {end_reason}")
-    
-    # 5. SUMMARY: Obtener resumen si está disponible
-    summary = session.get("summary", "") or session.get("ultravox_data", {}).get("summary", "")
-    
-    # Extraer NOMBRE_PERSONA si está disponible
-    nombre_persona = session.get("nombre_persona", "") or "No extraído"
-    
-    # Preparar payload con todos los campos
-    payload = {
-        "route": "2",
-        "number": telefono,
-        "TRANSCRIPCION_FINAL": session.get("transcript", ""),
-        "TELEFONO": telefono,
-        "PIN_LIFEPLUS": pin_lifeplus,
-        "START_TIME": start_time,
-        "END_TIME": end_time,
-        "DURACION": duration,
-        "CALL_ID": call_id,
-        "ULTRAVOX_RECORDING_URL": ultravox_url,
-        "End_Reason": end_reason,  # Cambiar a End_Reason para coincidir con lo esperado en N8N
-        "SUMMARY": summary,
-        "NOMBRE_PERSONA": nombre_persona
-    }
-    
-    print("[DEBUG RUTA 2] Payload completo a enviar a n8n:")
-    print(json.dumps(payload, indent=2))
-    
-    # Enviar a n8n
-    if N8N_WEBHOOK_URL:
-        try:
-            # Intentar envío
-            print(f"[DEBUG RUTA 2] Enviando POST a: {N8N_WEBHOOK_URL}")
-            response = requests.post(N8N_WEBHOOK_URL, json=payload, timeout=30)
-            print(f"[DEBUG RUTA 2] Status: {response.status_code}")
-            print(f"[DEBUG RUTA 2] Respuesta: {response.text}")
-            
-            # Verificar si la respuesta fue exitosa
-            if response.status_code == 200:
-                print("[DEBUG RUTA 2] Envío completado con éxito")
-                return True
-            else:
-                print(f"[ERROR RUTA 2] La respuesta no fue 200 OK: {response.status_code}")
-                print(f"[ERROR RUTA 2] Respuesta completa: {response.text}")
+            except Exception as e:
+                print(f"[ERROR RUTA 2] Error calculando duración: {e}")
+                import traceback
+                traceback.print_exc()
+                duration = "Error calculando"
+        else:
+            print(f"[DEBUG RUTA 2] Usando duración pre-calculada: {duration}")
+        call_id = session.get("call_id") or session.get("ultravox_call_id") or session.get("call_sid", "desconocido")
+        print(f"[DEBUG RUTA 2] CALL_ID: {call_id}")
+        ultravox_url = get_ultravox_recording_url(session, call_id)
+        if ultravox_url is None:
+            print("[WARN RUTA 2] ULTRAVOX_RECORDING_URL es None, se asignará cadena vacía.")
+            ultravox_url = ""
+        else:
+            ultravox_url = ultravox_url.rstrip(";")
+        print(f"[DEBUG RUTA 2] ULTRAVOX_RECORDING_URL: {ultravox_url}")
+        end_reason = session.get("end_reason") or session.get("ultravox_data", {}).get("end_reason") or session.get("callDetails", {}).get("callStatus", "desconocido")
+        if end_reason == "No respondido" or not end_reason:
+            end_reason = "desconocido"
+        print(f"[DEBUG RUTA 2] END_REASON final para enviar a N8N: {end_reason}")
+        summary = session.get("summary", "") or session.get("ultravox_data", {}).get("summary", "")
+        nombre_persona = session.get("nombre_persona", "") or "No extraído"
+        payload = {
+            "route": "2",
+            "number": telefono,
+            "TRANSCRIPCION_FINAL": session.get("transcript", ""),
+            "TELEFONO": telefono,
+            "PIN_LIFEPLUS": pin_lifeplus,
+            "START_TIME": start_time,
+            "END_TIME": end_time,
+            "DURACION": duration,
+            "CALL_ID": call_id,
+            "ULTRAVOX_RECORDING_URL": ultravox_url,
+            "End_Reason": end_reason,
+            "SUMMARY": summary,
+            "NOMBRE_PERSONA": nombre_persona
+        }
+        print("[DEBUG RUTA 2] Payload completo a enviar a n8n:")
+        import json
+        print(json.dumps(payload, indent=2))
+        if N8N_WEBHOOK_URL:
+            try:
+                print(f"[DEBUG RUTA 2] Attempting POST to N8N: {N8N_WEBHOOK_URL}")
+                import requests
+                response = requests.post(N8N_WEBHOOK_URL, json=payload, timeout=30)
+                print(f"[DEBUG RUTA 2] N8N webhook response status code: {response.status_code}")
+                if response.status_code == 200:
+                    print("[DEBUG RUTA 2] Envío completado con éxito")
+                    print("[DEBUG] Exiting send_transcript_to_n8n function with success")
+                    return True
+                else:
+                    print(f"[ERROR RUTA 2] La respuesta no fue 200 OK: {response.status_code}")
+                    print(f"[ERROR RUTA 2] Respuesta completa: {response.text}")
+                    print("[DEBUG] Exiting send_transcript_to_n8n function with POST error")
+                    return False
+            except Exception as e:
+                print(f"[ERROR RUTA 2] Error al hacer POST a n8n: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                print("[DEBUG] Exiting send_transcript_to_n8n function with exception")
                 return False
-                
-        except Exception as e:
-            print(f"[ERROR RUTA 2] Error al hacer POST a n8n: {str(e)}")
-            traceback.print_exc()
+        else:
+            print("[ERROR RUTA 2] N8N_WEBHOOK_URL no está configurado")
+            print("[DEBUG] Exiting send_transcript_to_n8n function with missing URL")
             return False
-    else:
-        print("[ERROR RUTA 2] N8N_WEBHOOK_URL no está configurado")
+    except Exception as e:
+        print(f"[ERROR RUTA 2] Unhandled exception in send_transcript_to_n8n: {e}")
+        import traceback
+        traceback.print_exc()
+        print("[DEBUG] Exiting send_transcript_to_n8n function with unhandled exception")
         return False
 
 #
 # Send data to N8N webhook
 #
 async def send_to_webhook(payload):
+    print("[DEBUG] Entering send_to_webhook function")
+    import json
     if not N8N_WEBHOOK_URL:
         print("Error: N8N_WEBHOOK_URL is not set")
+        print("[DEBUG] Exiting send_to_webhook function with missing URL")
         return json.dumps({"error": "N8N_WEBHOOK_URL not configured"})
-        
     try:
-        print(f"Sending payload to N8N webhook: {N8N_WEBHOOK_URL}")
-        print(f"Payload: {json.dumps(payload, indent=2)}")
-        
-        # Asegurarse de que el campo 'data' no esté serializado dos veces
+        print(f"[DEBUG] Sending payload to N8N webhook: {N8N_WEBHOOK_URL}")
+        print(f"[DEBUG] Payload: {json.dumps(payload, indent=2)}")
         if 'data' in payload and isinstance(payload['data'], str):
             try:
-                # Intentar deserializar si es una cadena JSON
                 payload['data'] = json.loads(payload['data'])
-                print(f"Deserializado campo 'data' de JSON string a objeto: {json.dumps(payload['data'], indent=2)}")
+                print(f"[DEBUG] Deserializado campo 'data' de JSON string a objeto: {json.dumps(payload['data'], indent=2)}")
             except json.JSONDecodeError:
-                # Si no es JSON válido, dejarlo como está
-                print(f"El campo 'data' no es JSON válido, se enviará como string")
-        
+                print(f"[DEBUG] El campo 'data' no es JSON válido, se enviará como string")
+        import requests
         response = requests.post(
             N8N_WEBHOOK_URL,
             json=payload,
             headers={"Content-Type": "application/json"},
-            timeout=30  # Añadir timeout de 30 segundos
+            timeout=30
         )
-        
-        print(f"N8N webhook response status code: {response.status_code}")
-        print(f"N8N webhook response headers: {response.headers}")
-        print(f"N8N webhook response text: {response.text}")
-        
+        print(f"[DEBUG] N8N webhook response status code: {response.status_code}")
+        print(f"[DEBUG] N8N webhook response headers: {response.headers}")
+        print(f"[DEBUG] N8N webhook response text: {response.text}")
         if response.status_code != 200:
-            print(f"N8N webhook returned status code {response.status_code}")
-            print(f"Response: {response.text}")
+            print(f"[DEBUG] N8N webhook returned status code {response.status_code}")
+            print(f"[DEBUG] Response: {response.text}")
+            print("[DEBUG] Exiting send_to_webhook function with POST error")
             return json.dumps({"error": f"N8N webhook returned status {response.status_code}", "response": response.text})
-            
+        print("[DEBUG] Exiting send_to_webhook function with success")
         return response.text
-        
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         error_msg = f"Error sending data to N8N webhook: {str(e)}"
-        print(error_msg)
-        traceback.print_exc()  # Imprimir stack trace completo
+        print(f"[DEBUG] {error_msg}")
+        import traceback
+        traceback.print_exc()
+        print("[DEBUG] Exiting send_to_webhook function with exception")
         return json.dumps({"error": error_msg})
 
 #
-# Handle Gather input from Twilio
+# Gather input from Twilio
 #
 @app.post("/gather-input")
 async def gather_input(request: Request):
