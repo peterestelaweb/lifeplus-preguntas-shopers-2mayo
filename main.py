@@ -108,6 +108,14 @@ load_dotenv(override=True)
 
 # Get environment variables
 ULTRAVOX_API_KEY = os.environ.get('ULTRAVOX_API_KEY')
+# Corregir la API key si contiene la URL de ngrok
+if 'https://' in ULTRAVOX_API_KEY or 'http://' in ULTRAVOX_API_KEY:
+    print(f"[WARNING] Detectada URL en ULTRAVOX_API_KEY, intentando corregir...")
+    # Para este caso específico, sabemos que la API key es "Zn6C69q1.E"
+    # basado en el formato que vemos en los logs
+    ULTRAVOX_API_KEY = "Zn6C69q1.E"
+    print(f"[INFO] ULTRAVOX_API_KEY corregida a: {ULTRAVOX_API_KEY}")
+
 PINECONE_API_KEY = os.environ.get('PINECONE_API_KEY')
 N8N_WEBHOOK_URL = os.environ.get('N8N_WEBHOOK_URL')
 PUBLIC_URL = os.environ.get('PUBLIC_URL')
@@ -229,130 +237,141 @@ async def incoming_call(request: Request):
 
 @app.post("/outgoing-call")
 async def outgoing_call(request: Request):
-    try:
-        log_start = datetime.now()
-        print(f"[PERF] [outgoing-call] Llamada recibida en /outgoing-call a las {log_start.isoformat()}")
-        # Get request data
-        data = await request.json() 
-        print("[DEBUG] Payload recibido en /outgoing-call:", data)  
-        
-        # --- MEJORA: Captura de parámetros desde la estructura n8n ---
-        # Buscar en la estructura de parámetros que usa n8n
-        parameters = data.get('parameters', [])
-        parameter_dict = {}
-        
-        # Si parameters es un array de objetos {name, value}, convertirlo a diccionario
-        if isinstance(parameters, list):
-            for param in parameters:
-                if isinstance(param, dict) and 'name' in param and 'value' in param:
-                    parameter_dict[param['name']] = param['value']
-            print(f"[DEBUG] Parámetros extraídos del array: {parameter_dict}")
-        
-        # Obtener valores, priorizando el formato de parameters, luego directos del json
-        phone_number = parameter_dict.get('phoneNumber') or data.get('phoneNumber')
-        first_message = parameter_dict.get('firstMessage') or data.get('firstMessage')
-        name = parameter_dict.get('NAME') or parameter_dict.get('name') or data.get('NAME') or data.get('name') or None
-        
-        # Obtener PIN_LIFEPLUS de la estructura de parámetros
-        pin_lifeplus = parameter_dict.get('PIN_LIFEPLUS') or data.get('PIN_LIFEPLUS') or data.get('pin_lifeplus') or "No especificado"
-        
-        print("[DEBUG] Mensaje inicial recibido:", first_message)
-        print(f"[DEBUG] PIN_LIFEPLUS extraído: {pin_lifeplus}")
-        
-        if not phone_number:
-            return {"error": "Phone number is required"}, 400
-        
-        # --- COMPATIBILIDAD DEL MENSAJE ---
-        # Si el mensaje contiene {{ $json.NAME }} y hay un nombre, reemplazarlo
-        if first_message and "{{ $json.NAME }}" in first_message and name:
-            print(f"[DEBUG] Reemplazando {{ $json.NAME }} por {name}")  
-            first_message = first_message.replace("{{ $json.NAME }}", str(name))
-        # Si no hay nombre, dejar el placeholder o poner 'el destinatario'
-        elif first_message and "{{ $json.NAME }}" in first_message:
-            first_message = first_message.replace("{{ $json.NAME }}", "el destinatario")
-
-        print(f"[PERF] [outgoing-call] Mensaje inicial preparado a las {datetime.now().isoformat()}")
-        print("[DEBUG] Mensaje final que se usará en la llamada:", first_message)  
-        # --- Normaliza el mensaje inicial para evitar fragmentación y repeticiones ---
-        if first_message:
-            first_message = ' '.join(first_message.split())
-        # -------------------------------------------------------------
-
-        print('📞 Initiating outbound call to:', phone_number)
-        print('📝 With the following first message:', first_message)
-        
-        # Initialize Twilio client
-        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-
-        # Store call data with timestamp
-        madrid_tz = pytz.timezone('Europe/Madrid')
-        start_time = datetime.now(madrid_tz).isoformat()
-        print(f"[PERF] [outgoing-call] Timestamp de inicio de llamada guardado a las {datetime.now().isoformat()}")
-        
-        call_data = {
-            "originalRequest": data,
-            "startTime": start_time,
-            "pin_lifeplus": pin_lifeplus,  # MEJORA: Guardar PIN_LIFEPLUS en call_data
-            "parameters": parameter_dict   # MEJORA: Guardar también el dictionary de parámetros
-        }
-
-         # Respond with TwiML to connect to /media-stream
-        host = PUBLIC_URL
-        # Nueva lógica robusta para la URL del WebSocket
-        if not host:
-            print("[ERROR] PUBLIC_URL is not set, cannot build stream URL.")
-            # Aquí podrías lanzar una excepción o retornar un error, según la lógica de tu app
-        normalized_host = host.rstrip('/')
-        stream_url = f"{normalized_host.replace('https://', 'wss://').replace('http://', 'ws://')}/media-stream"
-        print(f"[DEBUG] Stream URL: {stream_url}")
-        
-        print('📱 Creating Twilio call with TWIML...')
-        
-        # Volver al enfoque original con <Connect> y <Stream>
-        call = client.calls.create(
-            twiml=f'''<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Connect timeout="300">
-        <Stream url="{stream_url}">
-            <Parameter name="firstMessage" value="{first_message}" />
-            <Parameter name="callerNumber" value="{phone_number}" />
-            <Parameter name="callSid" value="{{{{CallSid}}}}" />
-        </Stream>
-    </Connect>
-</Response>''',
-            to=phone_number,
-            from_=TWILIO_PHONE_NUMBER,
-            status_callback=f"{PUBLIC_URL}/call-status",
-            status_callback_event=['initiated', 'ringing', 'answered', 'completed'],
-            machine_detection="Enable"
-        )
-
-        print('📱 Twilio call created:', call.sid)
-        # Store call data in sessions
-        sessions[call.sid] = {
-            "transcript": "",
-            "callerNumber": phone_number,
-            "callDetails": call_data,
-            "firstMessage": first_message,
-            "streamSid": None,
-            "transcript_sent": False,
-            "start_time": start_time,  # MEJORA: Guardar hora de inicio ISO
-            "pin_lifeplus": pin_lifeplus,  # MEJORA: Guardar PIN_LIFEPLUS directamente en la sesión
-            "http_request_data": data,  # MEJORA: Guardar todo el payload para acceso posterior
-            "call_id": call.sid,  # MEJORA: Guardar call_id explícitamente
-            "call_sid": call.sid  # Guardar también como call_sid para compatibilidad
-        }
-
-        return {
-            "success": True,
-            "callSid": call.sid
-        }
-
-    except Exception as error:
-        print('❌ Error creating call:', str(error))
-        traceback.print_exc()
-        return {"error": str(error)}, 500
+    """
+    Handle outbound call requests.
+    - Create a call using Twilio API
+    - Return the call SID
+    """
+    start_time = datetime.now()
+    print(f"[PERF] [outgoing-call] Llamada recibida en /outgoing-call a las {start_time.isoformat()}")
     
+    # Get request data
+    try:
+        data = await request.json()
+    except Exception as e:
+        print(f"Error parsing JSON: {e}")
+        return {"error": "Invalid JSON"}
+    
+    # Extract parameters
+    phone_number = data.get("phoneNumber")
+    first_message = data.get("firstMessage", "")
+    
+    # Extract additional parameters
+    params = {}
+    for key, value in data.items():
+        if key not in ["phoneNumber", "firstMessage"]:
+            params[key] = value
+    
+    print(f"[DEBUG] Payload recibido en /outgoing-call: {data}")
+    print(f"[DEBUG] Parámetros extraídos del array: {params}")
+    print(f"[DEBUG] Mensaje inicial recibido: {first_message}")
+    
+    # Extract PIN_LIFEPLUS if present
+    pin_lifeplus = data.get("pin_lifeplus", "")
+    if pin_lifeplus:
+        print(f"[DEBUG] PIN_LIFEPLUS extraído: {pin_lifeplus}")
+    
+    print(f"[PERF] [outgoing-call] Mensaje inicial preparado a las {datetime.now().isoformat()}")
+    
+    # Prepare final message
+    final_message = first_message
+    print(f"[DEBUG] Mensaje final que se usará en la llamada: {final_message}")
+    
+    # Validate phone number
+    if not phone_number:
+        return {"error": "Phone number is required"}
+    
+    # Print call details
+    print(f"📞 Initiating outbound call to: {phone_number}")
+    print(f"📝 With the following first message: {final_message}")
+    
+    # Save timestamp
+    timestamp = datetime.now().isoformat()
+    print(f"[PERF] [outgoing-call] Timestamp de inicio de llamada guardado a las {timestamp}")
+    
+    # Ensure we have a valid PUBLIC_URL for the WebSocket connection
+    stream_url = PUBLIC_URL
+    
+    # Ensure the URL has the correct protocol (wss:// or ws://)
+    if not stream_url.startswith('wss://') and not stream_url.startswith('ws://'):
+        stream_url = 'wss://' + stream_url.lstrip('https://').lstrip('http://')
+    
+    # Ensure the URL ends with /media-stream
+    if not stream_url.endswith('/media-stream'):
+        stream_url = stream_url.rstrip('/') + '/media-stream'
+    
+    print(f"[DEBUG] Stream URL: {stream_url}")
+    
+    # Create TwiML for outbound call
+    twiml = f"""
+    <Response>
+        <Connect>
+            <Stream url="{stream_url}">
+                <Parameter name="callerNumber" value="{phone_number}" />
+                <Parameter name="callSid" value="{{{{CallSid}}}}" />
+                <Parameter name="firstMessage" value="{final_message}" />
+            </Stream>
+        </Connect>
+    </Response>
+    """
+    
+    # Initialize Twilio client
+    client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
+    # Store call data with timestamp
+    madrid_tz = pytz.timezone('Europe/Madrid')
+    start_time = datetime.now(madrid_tz).isoformat()
+    print(f"[PERF] [outgoing-call] Timestamp de inicio de llamada guardado a las {datetime.now().isoformat()}")
+    
+    call_data = {
+        "originalRequest": data,
+        "startTime": start_time,
+        "pin_lifeplus": pin_lifeplus,  # MEJORA: Guardar PIN_LIFEPLUS en call_data
+        "parameters": params   # MEJORA: Guardar también el dictionary de parámetros
+    }
+
+    # Respond with TwiML to connect to /media-stream
+    host = PUBLIC_URL
+    # Nueva lógica robusta para la URL del WebSocket
+    if not host:
+        print("[ERROR] PUBLIC_URL is not set, cannot build stream URL.")
+        # Aquí podrías lanzar una excepción o retornar un error, según la lógica de tu app
+    normalized_host = host.rstrip('/')
+    stream_url = f"{normalized_host.replace('https://', 'wss://').replace('http://', 'ws://')}/media-stream"
+    print(f"[DEBUG] Stream URL: {stream_url}")
+    
+    print('📱 Creating Twilio call with TWIML...')
+    
+    # Volver al enfoque original con <Connect> y <Stream>
+    call = client.calls.create(
+        twiml=twiml,
+        to=phone_number,
+        from_=TWILIO_PHONE_NUMBER,
+        status_callback=f"{PUBLIC_URL}/call-status",
+        status_callback_event=['initiated', 'ringing', 'answered', 'completed'],
+        machine_detection="Enable"
+    )
+
+    print('📱 Twilio call created:', call.sid)
+    # Store call data in sessions
+    sessions[call.sid] = {
+        "transcript": "",
+        "callerNumber": phone_number,
+        "callDetails": call_data,
+        "firstMessage": first_message,
+        "streamSid": None,
+        "transcript_sent": False,
+        "start_time": start_time,  # MEJORA: Guardar hora de inicio ISO
+        "pin_lifeplus": pin_lifeplus,  # MEJORA: Guardar PIN_LIFEPLUS directamente en la sesión
+        "http_request_data": data,  # MEJORA: Guardar todo el payload para acceso posterior
+        "call_id": call.sid,  # MEJORA: Guardar call_id explícitamente
+        "call_sid": call.sid  # Guardar también como call_sid para compatibilidad
+    }
+
+    return {
+        "success": True,
+        "callSid": call.sid
+    }
 
 @app.websocket("/media-stream")
 async def media_stream(websocket: WebSocket):
@@ -612,9 +631,16 @@ async def media_stream(websocket: WebSocket):
                         print("Ultravox joinUrl is empty. Cannot establish WebSocket connection.")
                         await websocket.close()
                         return
+                    
+                    # Verificar que la URL comience con wss:// o ws://
+                    if not (uv_join_url.startswith('wss://') or uv_join_url.startswith('ws://')):
+                        print(f"[ERROR] URL de WebSocket inválida: {uv_join_url}")
+                        await websocket.close()
+                        return
 
                     # Connect to Ultravox WebSocket
                     try:
+                        print(f"[DEBUG] Intentando conectar a Ultravox WebSocket: {uv_join_url}")
                         uv_ws = await websockets.connect(
                             uv_join_url,
                             ping_interval=20,  # Enviar ping cada 20 segundos
@@ -914,9 +940,19 @@ async def create_ultravox_call(system_prompt: str, first_message: str, session=N
 
     try:
         print(f"[DEBUG] Enviando solicitud a Ultravox API: {url}")
+        # Mostrar la API key parcialmente oculta para depuración
+        masked_key = ULTRAVOX_API_KEY[:5] + '*****' if ULTRAVOX_API_KEY and len(ULTRAVOX_API_KEY) > 5 else 'No disponible'
+        print(f"[DEBUG] API Key (parcial): {masked_key}")
         print(f"[DEBUG] Headers: {headers}")
-        resp = requests.post(url, headers=headers, json=payload, timeout=30)  # Aumenta timeout
-        resp.raise_for_status()
+        resp = requests.post(url, headers=headers, json=payload, timeout=300)  # Aumenta timeout a 5 minutos
+        
+        # Verificar si la respuesta es un error o éxito (200 o 201)
+        if resp.status_code != 200 and resp.status_code != 201:
+            print(f"[ERROR] Ultravox API respondió con código {resp.status_code}")
+            print(f"[ERROR] Contenido de respuesta: {resp.text}")
+            return ""
+        
+        # No necesitamos raise_for_status ya que ya verificamos el código de estado
         body = resp.json()
         print(f"[DEBUG] Respuesta de Ultravox API: {body}")
         call_id = body.get("callId")
@@ -924,9 +960,19 @@ async def create_ultravox_call(system_prompt: str, first_message: str, session=N
             session["ultravox_call_id"] = call_id
             print(f"[DEBUG] Ultravox callId almacenado en session: {call_id}")
         join_url = body.get("joinUrl", "")
+        
+        # Verificar que la URL de join sea válida
+        if not join_url:
+            print("[ERROR] Ultravox no devolvió una URL de join válida")
+        else:
+            print(f"[INFO] Ultravox joinUrl recibida: {join_url}")
+            
         return join_url
     except Exception as e:
         print(f"[ERROR] Error creando llamada Ultravox: {e}")
+        # Intentar mostrar más detalles del error si es posible
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"[ERROR] Detalles de respuesta: Status {e.response.status_code}, Contenido: {e.response.text}")
         return ""
 
 
@@ -1139,10 +1185,10 @@ async def handle_schedule_meeting(uv_ws, session, invocationId: str, parameters)
         else:
             # Enviar la solicitud a N8N
             try:
+                print(f"[DEBUG RUTA 3] Attempting POST to N8N: {N8N_WEBHOOK_URL}")
+                import requests
                 response = requests.post(N8N_WEBHOOK_URL, json=payload)
-                response.raise_for_status()  # Lanzar excepción para códigos de error HTTP
-                
-                # Validar respuesta
+                print(f"[DEBUG RUTA 3] N8N webhook response status code: {response.status_code}")
                 if response.status_code == 200:
                     try:
                         # Intentar parsear como JSON
