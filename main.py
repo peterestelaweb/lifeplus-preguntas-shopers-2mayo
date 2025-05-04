@@ -1454,9 +1454,28 @@ async def gather_input(request: Request):
         return Response(content=twiml_response, media_type="text/xml")
 
 #
-# Run app via Uvicorn
-#
+# Run Application ---
+# This block runs the FastAPI application using Uvicorn when the script is executed directly (e.g., python main.py).
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
-print("Cambio visible para commit")
+    import os # Asegurarse de que os está importado
+
+    # Detectar si la variable de entorno RAILWAY_ENVIRONMENT existe (inyectada por Railway en sus entornos).
+    # Si existe, asumimos que estamos en Railway y debemos escuchar en el puerto 80 por defecto.
+    # De lo contrario, asumimos que estamos en un entorno local/dev y usamos el puerto configurado (PORT).
+    if os.environ.get('RAILWAY_ENVIRONMENT'):
+        print("Running in Railway environment, explicitly listening on port 80.")
+        # En Railway, escuchar en el puerto 80 es el estándar expuesto por defecto.
+        uvicorn.run(app, host="0.0.0.0", port=80)
+    else:
+        # Ejecutando localmente o en otro entorno (no Railway), usar el puerto configurado (PORT del .env, default 8000).
+        print(f"Running in local/dev environment, listening on port {PORT}.")
+        # Asegurarse de que la variable PORT está accesible aquí (definida globalmente).
+        uvicorn.run(app, host="0.0.0.0", port=PORT)
+
+    # Esta línea se ejecuta después de que uvicorn.run retorna (al apagar el servidor).
+    print("Uvicorn server stopped.")
+
+# Esta línea está fuera del bloque if __name__ == "__main__":.
+# Se ejecuta si el script es importado como módulo, no al ejecutarse directamente.
+# print("Script finished or imported.") # Comentado o ajustado según preferencia
