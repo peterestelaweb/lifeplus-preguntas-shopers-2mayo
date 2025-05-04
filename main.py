@@ -211,13 +211,7 @@ async def incoming_call(request: Request):
     host = PUBLIC_URL
     # Normalizar host: quitar barra final y cambiar esquema
     normalized_host = host.rstrip('/')
-    if normalized_host.startswith('https://'):
-        stream_url = normalized_host.replace('https://', 'wss://')
-    elif normalized_host.startswith('http://'):
-        stream_url = normalized_host.replace('http://', 'ws://')
-    else:
-        stream_url = f"wss://{normalized_host}"
-    stream_url = f"{stream_url}/media-stream"
+    stream_url = f"{normalized_host.replace('https://', 'wss://').replace('http://', 'ws://')}/media-stream"
 
     twiml_response = f"""<?xml version="1.0" encoding="UTF-8"?>
         <Response>
@@ -304,21 +298,12 @@ async def outgoing_call(request: Request):
 
          # Respond with TwiML to connect to /media-stream
         host = PUBLIC_URL
-        
-        # Asegurarse de que la URL del WebSocket sea correcta
+        # Nueva lógica robusta para la URL del WebSocket
+        if not host:
+            print("[ERROR] PUBLIC_URL is not set, cannot build stream URL.")
+            # Aquí podrías lanzar una excepción o retornar un error, según la lógica de tu app
         normalized_host = host.rstrip('/')
-        if normalized_host.startswith('https://'):
-            stream_url = normalized_host.replace('https://', 'wss://')
-        elif normalized_host.startswith('http://'):
-            stream_url = normalized_host.replace('http://', 'ws://')
-        else:
-            # Si no tiene esquema, asumimos https
-            stream_url = f"wss://{normalized_host}"
-        
-        # Asegurarse de que la URL termine con /media-stream
-        if not stream_url.endswith('/media-stream'):
-            stream_url = f"{stream_url}/media-stream"
-            
+        stream_url = f"{normalized_host.replace('https://', 'wss://').replace('http://', 'ws://')}/media-stream"
         print(f"[DEBUG] Stream URL: {stream_url}")
         
         print('📱 Creating Twilio call with TWIML...')
