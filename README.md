@@ -163,3 +163,5 @@ This project is licensed under the MIT License.
 
 **Disclaimer:** This template is provided as-is and is meant for educational purposes. Ensure you comply with all relevant terms of service and legal requirements when using third-party APIs and services.
 trigger deploy
+trigger deploy2
+
