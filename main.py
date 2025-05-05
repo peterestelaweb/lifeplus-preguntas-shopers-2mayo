@@ -932,6 +932,15 @@ async def create_ultravox_call(system_prompt: str, first_message: str, session=N
                     "timeout": "20s",
                     "client": {},
                 },
+            },
+            {
+                "temporaryTool": {
+                    "modelToolName": "hangUp",
+                    "description": "End the current call. Use this when the conversation is complete or when the customer requests to end the call.",
+                    "dynamicParameters": [],
+                    "timeout": "5s",
+                    "client": {},
+                },
             }
         ]
     }
