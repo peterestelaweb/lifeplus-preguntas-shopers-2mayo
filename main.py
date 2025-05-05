@@ -460,7 +460,8 @@ async def media_stream(websocket: WebSocket):
                                     "está ocupado. por favor, deja tu mensaje",
                                     "deje su mensaje tras la señal",
                                     "deje su mensaje después de la señal",
-                                    "deje su mensaje"
+                                    "deje su mensaje",
+                                    "ahora cuando suene la señal puedes dejar tu mensaje"
                                 ]
                                 transcripcion = transcripcion.lower()
                                 return any(frase in transcripcion for frase in frases)
